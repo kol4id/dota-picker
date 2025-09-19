@@ -5,14 +5,38 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql" 
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("POOL_URL") 
+  directUrl = env("DATABASE_URL")
+}
+
+enum MatchupType {
+  VS    // Герой против
+  WITH  // Герой вместе
 }
 
 model Hero {
   id            Int     @id 
   displayName   String
   shortName     String
-  
   updatedAt     DateTime @updatedAt
+
+  matchupsAsA   HeroMatchup[] @relation("HeroA")
+  matchupsAsB   HeroMatchup[] @relation("HeroB")
 }
+
+model HeroMatchup {
+  heroA_id    Int
+  heroB_id    Int
+  matchupType MatchupType
+  winCount    Int
+  matchCount  Int
+
+  updatedAt DateTime @updatedAt
+
+  heroA       Hero @relation("HeroA", fields: [heroA_id], references: [id], onDelete: Cascade)
+  heroB       Hero @relation("HeroB", fields: [heroB_id], references: [id], onDelete: Cascade)
+
+  @@id ([heroA_id, heroB_id, matchupType])
+}
+
