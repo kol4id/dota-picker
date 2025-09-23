@@ -1,4 +1,6 @@
+import prisma from "@/lib/db"; 
 const STRATZ_KEY = process.env.STRATZ_KEY!
+
 export class HeroService {
     static async fetchHeroes(){
         const query = 
@@ -12,8 +14,6 @@ export class HeroService {
             }
         }`;
 
-        console.log('fetching heroes');
-
         const response = await fetch("https://api.stratz.com/graphql", {
             method: 'POST',
             headers: {
@@ -23,8 +23,12 @@ export class HeroService {
             body: JSON.stringify({ query: query })
         });
         
-        console.log('heroes fetched, status:', response.status);
         const data = await response.json();
+        await prisma.hero.createMany({
+            data: data.data.constants.heroes,
+            skipDuplicates: true,
+        });
+        
         return data.data.constants.heroes;
     }
 }
