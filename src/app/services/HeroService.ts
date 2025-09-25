@@ -36,6 +36,9 @@ export class HeroService {
             }
         }`;
 
+        const hernya = await this.getHeroesWinrate();
+        // hernya.sort((a, b) => a.heroId - b.heroId);
+        console.log(`${JSON.stringify(hernya)}`);
         const response = await fetch("https://api.stratz.com/graphql", {
             method: 'POST',
             headers: {
@@ -75,7 +78,7 @@ export class HeroService {
                     } 
                 } 
             }`
-       
+
         const response = await fetch("https://api.stratz.com/graphql", {
             method: 'POST',
             headers: {
@@ -97,6 +100,63 @@ export class HeroService {
         console.timeEnd('transaction');
         console.log(`Транзакция выполнена ${result.length} операций применено`);
         return result;
+    }
+
+    static async getHeroWinrate (identifier: string): Promise<number>;
+    static async getHeroWinrate (identifier: number): Promise<number>;
+
+    static async getHeroWinrate (identifier: string | number): Promise<number> {
+        const where: Prisma.HeroWhereInput = typeof(identifier) == "number"
+            ? {id: identifier}
+            : {OR: [
+                {shortName: {equals: identifier, mode: 'insensitive'}},
+                {displayName: {equals: identifier, mode: 'insensitive'}}
+            ]}
+        
+        const hero = await prisma.hero.findFirst({where});
+        if (!hero) return -1;
+
+        const result = await prisma.heroMatchup.aggregate({
+            where: {heroA_id: hero.id},
+            _sum: {winCount: true, matchCount: true}
+        })
+        console.log(`герой: ${hero.displayName}`)
+        console.log(`всего игр: ${result._sum.matchCount}`)
+        console.log(`побед: ${result._sum.winCount}`)
+        return ((result._sum.winCount ?? 0) / (result._sum.matchCount ?? 0));
+    }
+
+    static async getHeroesWinrate () {
+        const heroesStats = await prisma.heroMatchup.groupBy({
+            by: ['heroA_id'],
+            _sum: {
+                winCount: true,
+                matchCount: true
+            }
+        })
+
+        const result = heroesStats.map(hero => ({
+            heroId: hero.heroA_id,
+            winrate: hero._sum.winCount! / hero._sum.matchCount!,
+        }));
+
+        result.sort((a,b) => b.winrate - a.winrate);
+
+        return result;
+    }
+
+    static async getMatchupStats (heroId: number, matchType: 'VS' | 'WITH') {
+        const stats = await prisma.heroMatchup.findMany({
+            where: {heroA_id: heroId, matchupType: matchType}
+        })
+
+        const result = stats.map(stat => ({
+            heroId: stat.heroA_id,
+            winrate: stat.winCount! / stat.matchCount!,
+        }));
+
+        result.sort((a, b) => b.winrate - a.winrate);
+        return result
     }
 
     private static async generateMatchupUpsert (data: IMatchUp[], heroes: Hero[]) {
