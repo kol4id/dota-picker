@@ -1,18 +1,20 @@
 import prisma from "@/lib/db"; 
 import { Hero, HeroMatchup, Prisma } from "@prisma/client";
-const STRATZ_KEY = process.env.STRATZ_KEY!
+import { PredictionService } from "./PredictionService";
 
-interface IMatchUp {
-    vs: [{ 
-        heroId2: number,
-        winCount: number,
-        matchCount: number,
-    }] 
-    with: [{ 
-        heroId2: number, 
-        winCount: number, 
-        matchCount: number, 
-    }] 
+const STRATZ_KEY = process.env.STRATZ_KEY!;
+const STRATZ_API = 'https://api.stratz.com/graphql';
+
+
+interface StratzMatchupDetail {
+    heroId2: number, 
+    winCount: number, 
+    matchCount: number, 
+}
+
+interface StratzApiMatchup {
+    vs: StratzMatchupDetail[],
+    with: StratzMatchupDetail[]
 }
 
 export class HeroService {
@@ -26,71 +28,39 @@ export class HeroService {
 
     static async fetchHeroes(){
         const query = 
-        `query {
-            constants { 
-                heroes { 
-                    id 
-                    displayName 
-                    shortName
+            `query {
+                constants { 
+                    heroes {id displayName shortName}
                 }
-            }
-        }`;
+            }`;
 
-        const hernya = await this.getHeroesWinrate();
-        // hernya.sort((a, b) => a.heroId - b.heroId);
-        console.log(`${JSON.stringify(hernya)}`);
-        const response = await fetch("https://api.stratz.com/graphql", {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${STRATZ_KEY}`
-            },
-            body: JSON.stringify({ query: query })
-        });
-        
-        const data = await response.json();
+        const data = await this.stratzFetcher<{constants:{heroes: Hero[]}}>(query);
+        const heroes = data.constants.heroes;
+
         await prisma.hero.createMany({
-            data: data.data.constants.heroes,
+            data: heroes,
             skipDuplicates: true,
         });
         
-        return data.data.constants.heroes;
+        return heroes;
     }
 
     static async fetchHerosMatchUps (){
         const heroes = await this.getHeroes();
-        const idsList = heroes.map(hero => hero.id);
+        const heroIds = heroes.map(hero => hero.id);
 
         const query = `
-            query HeroStatsQuery { 
-                heroStats { 
-                    matchUp(heroIds: [${idsList.toString()}] take: ${idsList.length + 1}) { 
-                        vs { 
-                            heroId2 
-                            winCount 
-                            matchCount 
-                        } 
-                        with { 
-                            heroId2 
-                            winCount 
-                            matchCount 
-                        } 
-                    } 
-                } 
-            }`
+            query HeroStatsQuery {
+                heroStats {
+                    matchUp(heroIds: [${heroIds.toString()}], take: ${heroIds.length}) {
+                        vs { heroId2 winCount matchCount }
+                        with { heroId2 winCount matchCount }
+                    }
+                }
+            }`;
 
-        const response = await fetch("https://api.stratz.com/graphql", {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${STRATZ_KEY}`
-            },
-            body: JSON.stringify({ query: query })
-        });
-
-        const data = await response.json();
-        const matchUps = data.data.heroStats.matchUp as IMatchUp[];
-        const upsertPromises = await this.generateMatchupUpsert(matchUps, heroes);
+        const data = await this.stratzFetcher<{heroStats: {matchUp: StratzApiMatchup[]}}>(query); 
+        const upsertPromises = await this.generateMatchupUpsert(data.heroStats.matchUp, heroes);
 
         console.log(`Получено ${upsertPromises.length} комбинаций.`);
         console.time('transaction');
@@ -120,9 +90,9 @@ export class HeroService {
             where: {heroA_id: hero.id},
             _sum: {winCount: true, matchCount: true}
         })
-        console.log(`герой: ${hero.displayName}`)
-        console.log(`всего игр: ${result._sum.matchCount}`)
-        console.log(`побед: ${result._sum.winCount}`)
+        // console.log(`герой: ${hero.displayName}`)
+        // console.log(`всего игр: ${result._sum.matchCount}`)
+        // console.log(`побед: ${result._sum.winCount}`)
         return ((result._sum.winCount ?? 0) / (result._sum.matchCount ?? 0));
     }
 
@@ -140,9 +110,7 @@ export class HeroService {
             winrate: hero._sum.winCount! / hero._sum.matchCount!,
         }));
 
-        result.sort((a,b) => b.winrate - a.winrate);
-
-        return result;
+        return result.sort((a,b) => a.heroId - b.heroId);
     }
 
     static async getMatchupStats (heroId: number, matchType: 'VS' | 'WITH') {
@@ -151,52 +119,42 @@ export class HeroService {
         })
 
         const result = stats.map(stat => ({
-            heroId: stat.heroA_id,
+            heroId: stat.heroB_id,
             winrate: stat.winCount! / stat.matchCount!,
         }));
 
-        result.sort((a, b) => b.winrate - a.winrate);
-        return result
+        return result.sort((a, b) => a.heroId - b.heroId)
     }
 
-    private static async generateMatchupUpsert (data: IMatchUp[], heroes: Hero[]) {
-        const upsertPromises: Prisma.PrismaPromise<HeroMatchup>[] = [];
-        let indx = 0;
-        
-        const generateUpsert = (index: number, type: 'VS' | 'WITH', hero: IMatchUp) =>{
-            const address = type == "VS" ? 'vs' : 'with';
-
-            return hero[address].map(match => prisma.heroMatchup.upsert({
+    private static async generateMatchupUpsert (matchupData: StratzApiMatchup[], heroes: Hero[]) {
+        const createUpsertPromise = (heroA_id: number, heroB_id: number, type: 'VS' | 'WITH', matchCount: number, winCount: number) =>{
+            return prisma.heroMatchup.upsert({
                 where: {
-                    heroA_id_heroB_id_matchupType: {
-                        heroA_id: heroes[index].id,
-                        heroB_id: match.heroId2,
-                        matchupType: type,
-                    }
+                    heroA_id_heroB_id_matchupType: { heroA_id, heroB_id, matchupType: type }
                 },
-                update: {
-                    matchCount: match.matchCount,
-                    winCount: match.winCount
-                },
-                create: {
-                    heroA_id: heroes[index].id,
-                    heroB_id: match.heroId2,
-                    matchupType: type,
-                    matchCount: match.matchCount,
-                    winCount: match.winCount
-                }
-            }))
+                update: { matchCount, winCount },
+                create: { heroA_id, heroB_id, matchupType: type, matchCount, winCount }
+            });
         }
-       
-        console.time('upsert gen');
-        data.forEach(hero => {
-            upsertPromises.push(...generateUpsert(indx, 'VS', hero));
-            upsertPromises.push(...generateUpsert(indx, 'WITH', hero));
-            indx++;
+
+        return matchupData.flatMap((matchup, index) =>{
+            const vs = matchup.vs.map(vs => createUpsertPromise(heroes[index].id, vs.heroId2, 'VS', vs.matchCount, vs.winCount));
+            const withUp = matchup.with.map(vs => createUpsertPromise(heroes[index].id, vs.heroId2, 'WITH', vs.matchCount, vs.winCount));
+            return vs.concat(withUp);
+        })
+    }
+
+    private static async stratzFetcher<T> (query: string): Promise<T> {
+        const response = await fetch(STRATZ_API, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${STRATZ_KEY}`
+            },
+            body: JSON.stringify({ query: query })
         })
 
-        console.timeEnd('upsert gen');
-
-        return upsertPromises;
+        if (!response.ok) throw new Error(response.status.toString());
+        return (await response.json()).data;
     }
 }
