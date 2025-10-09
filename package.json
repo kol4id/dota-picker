@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev --turbopack",
+    "debug": "set NODE_OPTIONS=--inspect && next dev",
     "build": "next build --turbopack",
     "start": "next start",
     "lint": "eslint"
@@ -12,7 +13,9 @@
     "@prisma/client": "^6.16.2",
     "next": "15.5.3",
     "react": "19.1.0",
-    "react-dom": "19.1.0"
+    "react-dom": "19.1.0",
+    "sass": "^1.93.2",
+    "zustand": "^5.0.8"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",

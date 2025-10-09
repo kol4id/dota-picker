@@ -6,28 +6,52 @@ interface MatchupStats {
 }
 
 interface TeamData {
-  allHeroesWinrate: { heroId: number; winrate: number }[];
-  teamHeroes: { heroId: number; winrate: number }[];
-  teamMatchupMap: Map<number, Map<number, number>>;
+  allHeroesWinrate: MatchupStats[];                     
+  teamHeroes: MatchupStats[];                            
+  enemyHeroes: MatchupStats[];                          
+  teamMatchupMap: Map<number, Map<number, number>>;     
+  enemyMatchupMap: Map<number, Map<number, number>>;   
 }
 
 export class PredictionService {
 
-    static async calculateNextPick (team: number[]) {
-        const {allHeroesWinrate, teamHeroes, teamMatchupMap} = await this.prepareTeamData(team);
+    static async calculateNextPick (team: number[] = [], enemy: number[] = []) {
+        if (!team.length && !enemy.length){
+            const allHeroesWinrate = (await HeroService.getHeroesWinrate()).sort((a, b) => b.winrate - a.winrate);
+            const sortedCandidates = allHeroesWinrate.map(hero => ({heroId: hero.heroId, deltaWR: hero.winrate}))
+            return {sortedCandidates, currentTeamSynergy: 0}
+        }
+        
+        const {allHeroesWinrate, teamHeroes, enemyHeroes, teamMatchupMap, enemyMatchupMap} = await this.prepareTeamData(team, enemy);
 
-        const candidates = allHeroesWinrate.filter(hero => !team.includes(hero.heroId));
+        const pickedHeroes = new Set([...team, ...enemy]);
+        const candidates = allHeroesWinrate.filter(hero => !pickedHeroes.has(hero.heroId));
+
         const sortedCandidates = candidates.map(candidate => {
-                const totalDelta = teamHeroes.reduce((sum, t) => {
-                    const expected = (candidate.winrate + t.winrate) / 2;
-                    const actual = teamMatchupMap.get(t.heroId)?.get(candidate.heroId) ?? 0;
-                    return sum + (actual - expected);
-                }, 0);
-                return { heroId: candidate.heroId, deltaWR: totalDelta / team.length };
-            })
-            .sort((a, b) => b.deltaWR - a.deltaWR);
+            const synergyDelta = teamHeroes.reduce((sum, teamHero) => {
+                const expected = (candidate.winrate + teamHero.winrate) / 2;
+                const actual = teamMatchupMap.get(teamHero.heroId)?.get(candidate.heroId) ?? expected;
+                return sum + (actual - expected);
+            }, 0);
 
-        const currentTeamSynergy = await this.calculateTeamSynergy(team, {allHeroesWinrate, teamHeroes, teamMatchupMap});
+            const counterDelta = enemyHeroes.reduce((sum, enemyHero) => {
+                const expected = enemyHero.winrate;
+                const actual = enemyMatchupMap.get(enemyHero.heroId)?.get(candidate.heroId) ?? expected
+                return sum + (expected - actual);
+            }, 0)
+
+            const avgSynergy = team.length > 0 ? synergyDelta / team.length : 0;
+            const avgCounter = enemy.length > 0 ? counterDelta / enemy.length : 0;
+
+            const totalDelta = avgSynergy + avgCounter;
+
+            return { heroId: candidate.heroId, deltaWR: totalDelta };
+        }).sort((a, b) => b.deltaWR - a.deltaWR);
+        
+        if (!team.length){
+            return {sortedCandidates, currentTeamSynergy: 0};    
+        }
+        const currentTeamSynergy = await this.calculateTeamSynergy(team, enemy, { allHeroesWinrate, teamHeroes, enemyHeroes, teamMatchupMap, enemyMatchupMap});
         return {sortedCandidates, currentTeamSynergy};
     }
 
@@ -57,41 +81,67 @@ export class PredictionService {
         return synergyDeltaWR
     }
 
-    private static async calculateTeamSynergy (team: number[], data: TeamData){
+    private static async calculateTeamSynergy (team: number[], enemy: number[], data: TeamData) {
         console.time('TeamSynergy');
-        if (team.length < 2) return 0;
+        if (team.length < 1) return 0;
 
-        const { teamHeroes, teamMatchupMap } = data;
+        const { teamHeroes, enemyHeroes, teamMatchupMap, enemyMatchupMap } = data;
 
         let totalSynergyDelta = 0;
         let pairCount = 0;
+        let totalCounterDelta = 0;
+        let counterCount = 0;
 
         for (let i = 0; i < teamHeroes.length; i++) {
             for (let j = i + 1; j < teamHeroes.length; j++) {
                 const expected = (teamHeroes[i].winrate + teamHeroes[j].winrate) / 2;
-                const actual = teamMatchupMap.get(teamHeroes[i].heroId)?.get(teamHeroes[j].heroId) ?? 0;
+                const actual = teamMatchupMap.get(teamHeroes[i].heroId)?.get(teamHeroes[j].heroId) ?? expected;
                 totalSynergyDelta += actual - expected;
                 pairCount++;
             }
         }
+
+        teamHeroes.forEach(hero =>{
+            enemyHeroes.forEach(enemy =>{
+                const expected = enemy.winrate;
+                const actual = enemyMatchupMap.get(enemy.heroId)?.get(hero.heroId) ?? expected;
+                totalCounterDelta += expected - actual;
+                counterCount++;
+            })
+        })
+
+        const avgSynergy = pairCount > 0 ? totalSynergyDelta / pairCount : 0;
+        const avgCounter = counterCount > 0 ? totalCounterDelta / counterCount : 0;
+
         console.timeEnd('TeamSynergy');
-        return pairCount > 0 ? (totalSynergyDelta / pairCount) : 0;
+
+        return avgSynergy + avgCounter;
     }
 
-    private static async prepareTeamData (team: number[]): Promise<TeamData> {
+    private static async prepareTeamData (team: number[] = [], enemy: number[] = []): Promise<TeamData> {
         console.time('PrepareTeamData');
-        const allHeroesWinrate = await HeroService.getHeroesWinrate();
-        const teamHeroes = allHeroesWinrate.filter(h => team.includes(h.heroId));
 
-        const matchupList = await Promise.all(
-            teamHeroes.map(hero => HeroService.getMatchupStats(hero.heroId, 'WITH'))
-        );
+        console.time('WITH DATABASE RUN');
+        const [allHeroesWinrate, teamStat, enemyStat] = await Promise.all([
+            HeroService.getHeroesWinrate(),
+            Promise.all(team.map(id => HeroService.getMatchupStats(id, 'WITH'))),
+            Promise.all(enemy.map(id => HeroService.getMatchupStats(id, 'VS'))),
+        ])
+        console.timeEnd('WITH DATABASE RUN');
 
-        const teamMatchupMap = new Map<number, Map<number, number>>();
-        teamHeroes.forEach((hero, indx) => {
-            teamMatchupMap.set(hero.heroId, new Map(matchupList[indx].map(m => [m.heroId, m.winrate])));
-        });
+        const allHeroesMap = new Map(allHeroesWinrate.map(hero => [hero.heroId, hero]));
+        const teamHeroes = team.map(id => allHeroesMap.get(id)!);
+        const enemyHeroes = enemy.map(id => allHeroesMap.get(id)!);
+
+        const toMatchup = (ids: number[], data: MatchupStats[][]) => {
+            return new Map(ids.map((id, indx) => [id, new Map(data[indx].map(match => [match.heroId, match.winrate]))]));
+        }
+
+        const teamMatchupMap = toMatchup(team, teamStat);
+        const enemyMatchupMap = toMatchup(enemy, enemyStat);
+        
         console.timeEnd('PrepareTeamData');
-        return { allHeroesWinrate, teamHeroes, teamMatchupMap };
-    }
+
+        return { allHeroesWinrate, teamHeroes, enemyHeroes, teamMatchupMap, enemyMatchupMap };
+    } 
 }

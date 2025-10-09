@@ -1,5 +1,5 @@
 import prisma from "@/lib/db"; 
-import { Hero, HeroMatchup, Prisma } from "@prisma/client";
+import { Hero, Prisma } from "@prisma/client";
 import { PredictionService } from "./PredictionService";
 
 const STRATZ_KEY = process.env.STRATZ_KEY!;
@@ -52,7 +52,7 @@ export class HeroService {
         const query = `
             query HeroStatsQuery {
                 heroStats {
-                    matchUp(heroIds: [${heroIds.toString()}], take: ${heroIds.length}) {
+                    matchUp(heroIds: [${heroIds.toString()}], take: ${heroIds.length}, bracketBasicIds: [LEGEND_ANCIENT, DIVINE_IMMORTAL, CRUSADER_ARCHON]) {
                         vs { heroId2 winCount matchCount }
                         with { heroId2 winCount matchCount }
                     }
@@ -90,9 +90,7 @@ export class HeroService {
             where: {heroA_id: hero.id},
             _sum: {winCount: true, matchCount: true}
         })
-        // console.log(`герой: ${hero.displayName}`)
-        // console.log(`всего игр: ${result._sum.matchCount}`)
-        // console.log(`побед: ${result._sum.winCount}`)
+       
         return ((result._sum.winCount ?? 0) / (result._sum.matchCount ?? 0));
     }
 
