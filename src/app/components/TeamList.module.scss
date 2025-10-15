@@ -1,0 +1,24 @@
+
+.team{
+    width: 370px;
+    height: 75px;
+    background-color: grey;
+
+    ul{
+        height: 100%;
+        display: flex;
+        gap: 5px;
+        list-style: none;
+        align-items: center;
+
+        li{
+            cursor: pointer;
+            height: 45;
+        }
+
+        img{
+            justify-self: center;
+            align-self: center;   
+        }
+    }
+}

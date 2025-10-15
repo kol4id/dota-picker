@@ -1,0 +1,44 @@
+
+.card{
+    display: flex;
+    flex-direction: row;
+    margin-bottom: 5px;
+    gap: 5px;
+
+    &_info{
+        display: flex;
+        flex-direction: column;
+        gap: 5px;
+
+        &_buttons{
+            width: 100%;
+            display: flex;
+            gap: 5px;
+
+            button{
+                cursor: pointer;
+                height: 25px;
+                padding: 0px 4px;
+                text-align: center;
+                border: none;
+            }
+
+            button:first-child{
+                background-color: greenyellow;
+            }
+
+            button:nth-child(2){
+                background-color: orangered;
+            }
+
+            button:hover{
+                opacity: 0.9;
+                scale: 0.92;
+            }
+        }
+
+        button{
+            max-width: 109px;
+        }
+    }
+}

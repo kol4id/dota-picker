@@ -1,11 +1,11 @@
 
 import styles from "./page.module.css";
-import HeroList from "./components/HeroList";
+import Main from "./components/Main";
 
 export default function Home() {
   return (
-    <section>
-      <HeroList/>
+    <section className={styles.main_area}>
+      <Main/>
     </section>
   );
 }
